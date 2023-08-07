@@ -70,6 +70,67 @@ pub fn ffi_based_access(obj: &PyAny) -> PyResult<BigInt> {
     Ok(BigInt::from_signed_bytes_le(&buffer))
 }
 
+pub fn ffi_based_access_zero_waste(obj: &PyAny) -> PyResult<BigInt> {
+    let ptr = obj.as_ptr();
+    if ptr.is_null() {
+        return Err(PyErr::fetch(obj.py()));
+    }
+    let mut nbytes = unsafe {pyo3::ffi::_PyLong_NumBits(ptr)};
+
+    if nbytes == 0 {
+        return Ok(BigInt::from(0))
+    }
+    // round up and add up to 4 bytes (but never 0) just for the sign bit because
+    // afaik at this moment there is no ffi function to get the sign
+    nbytes = (nbytes + 32) / 32 * 4;
+
+    let mut buffer = Vec::<u8>::with_capacity(nbytes);
+    unsafe {
+        let retcode = pyo3::ffi::_PyLong_AsByteArray(
+            ptr as *mut pyo3::ffi::PyLongObject,
+            buffer.as_mut_ptr(),
+            nbytes,
+            1,
+            1,
+        );
+        if retcode == -1 {
+            return Err(PyErr::fetch(obj.py()));
+        }
+        buffer.set_len(nbytes);
+    }
+
+    let sign = if buffer[nbytes-1] & 0x80 != 0 {
+        buffer.iter_mut().for_each(|element| *element = !*element);
+        Sign::Minus
+    } else {
+        Sign::Plus
+    };
+
+
+    assert!(buffer.len() % 4 == 0);
+    assert!(buffer.capacity() % 4 == 0);
+
+    let mut num =  BigInt::new(
+        sign,
+        unsafe {
+            let vec = Vec::from_raw_parts(
+                buffer.as_mut_ptr() as *mut u32,
+                buffer.len() / 4,
+                buffer.capacity() / 4
+            );
+            std::mem::forget(buffer);
+            vec
+        }
+    );
+
+    if num.sign() == Sign::Minus {
+        num -= 1;
+    }
+
+    Ok(num)
+
+}
+
 pub fn pytonormal(pyints: &[u32]) -> Vec<u32> {
     let mut newints: Vec<u32> = Vec::with_capacity(pyints.len());
     let mut current = 0;
