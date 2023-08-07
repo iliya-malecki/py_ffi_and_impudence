@@ -17,7 +17,7 @@ impl BigIntWrapper {
 #[cfg(feature = "slow")]
 impl<'source> FromPyObject<'source> for BigIntWrapper {
     fn extract(obj: &'source PyAny) -> PyResult<BigIntWrapper> {
-        Ok(BigIntWrapper(ffi_based_access(obj)?))
+        Ok(BigIntWrapper(ffi_based_access_zero_waste_but_smart(obj)?))
     }
 }
 
@@ -70,58 +70,45 @@ pub fn ffi_based_access(obj: &PyAny) -> PyResult<BigInt> {
     Ok(BigInt::from_signed_bytes_le(&buffer))
 }
 
-pub fn ffi_based_access_zero_waste(obj: &PyAny) -> PyResult<BigInt> {
+pub fn ffi_based_access_zero_waste_but_smart(obj: &PyAny) -> PyResult<BigInt> {
     let ptr = obj.as_ptr();
     if ptr.is_null() {
         return Err(PyErr::fetch(obj.py()));
     }
-    let mut nbytes = unsafe {pyo3::ffi::_PyLong_NumBits(ptr)};
-
-    if nbytes == 0 {
+    let mut digitcount = unsafe {pyo3::ffi::_PyLong_NumBits(ptr)};
+    if digitcount == 0 {
         return Ok(BigInt::from(0))
     }
-    // round up and add up to 4 bytes (but never 0) just for the sign bit because
-    // afaik at this moment there is no ffi function to get the sign
-    nbytes = (nbytes + 32) / 32 * 4;
+    digitcount = (digitcount + 32) / 32;
 
-    let mut buffer = Vec::<u8>::with_capacity(nbytes);
+    let mut buffer = Vec::<u32>::with_capacity(digitcount);
     unsafe {
         let retcode = pyo3::ffi::_PyLong_AsByteArray(
             ptr as *mut pyo3::ffi::PyLongObject,
-            buffer.as_mut_ptr(),
-            nbytes,
+            buffer.as_mut_ptr() as *mut u8,
+            digitcount * 4,
             1,
             1,
         );
         if retcode == -1 {
             return Err(PyErr::fetch(obj.py()));
         }
-        buffer.set_len(nbytes);
+        buffer.set_len(digitcount);
     }
 
-    let sign = if buffer[nbytes-1] & 0x80 != 0 {
+    #[cfg(target_endian = "big")]
+    buffer
+        .iter_mut()
+        .for_each(|chunk|{*chunk = u32::from_le(*chunk)});
+
+    let sign = if buffer[digitcount-1] & (1<<31) != 0 {
         buffer.iter_mut().for_each(|element| *element = !*element);
         Sign::Minus
     } else {
         Sign::Plus
     };
 
-
-    assert!(buffer.len() % 4 == 0);
-    assert!(buffer.capacity() % 4 == 0);
-
-    let mut num =  BigInt::new(
-        sign,
-        unsafe {
-            let vec = Vec::from_raw_parts(
-                buffer.as_mut_ptr() as *mut u32,
-                buffer.len() / 4,
-                buffer.capacity() / 4
-            );
-            std::mem::forget(buffer);
-            vec
-        }
-    );
+    let mut num =  BigInt::new(sign, buffer);
 
     if num.sign() == Sign::Minus {
         num -= 1;
