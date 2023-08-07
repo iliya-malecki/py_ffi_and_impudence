@@ -21,10 +21,11 @@ fn testmyshit(a: BigIntWrapper) -> PyResult<BigIntWrapper> {
 }
 #[pymodule]
 fn pyintedit(_py: Python, m: &PyModule) -> PyResult<()> {
-    let val = _py.eval("-45123", None, None).unwrap();
+    let val = _py.eval("-4_294_967_295", None, None).unwrap();
     let res = bigintwrapper::ffi_based_access_zero_waste_but_smart(val).unwrap();
     dbg!(res);
-    let val = _py.eval("-10**300", None, None).unwrap();
+
+    let val = _py.eval("10**300", None, None).unwrap();
     let smart = timeit!(bigintwrapper::ffi_based_access_zero_waste_but_smart(val), 1000000);
     let lowlevel = timeit!(bigintwrapper::lowlevel_access(val), 1000000);
     let baseline = timeit!(val.extract::<BigInt>(), 1000000);

@@ -79,6 +79,10 @@ pub fn ffi_based_access_zero_waste_but_smart(obj: &PyAny) -> PyResult<BigInt> {
     if digitcount == 0 {
         return Ok(BigInt::from(0))
     }
+    // 32 is here to allocate an additional u32 if all bits are used for the
+    // actual number, since the sign bit must go somewhere. Could be rewritten
+    // into big-endian + truncating the length after fetching the sign,
+    // but that is less efficient on average because BigInt is little-endian
     digitcount = (digitcount + 32) / 32;
 
     let mut buffer = Vec::<u32>::with_capacity(digitcount);
@@ -101,20 +105,14 @@ pub fn ffi_based_access_zero_waste_but_smart(obj: &PyAny) -> PyResult<BigInt> {
         .iter_mut()
         .for_each(|chunk|{*chunk = u32::from_le(*chunk)});
 
-    let sign = if buffer[digitcount-1] & (1<<31) != 0 {
-        buffer.iter_mut().for_each(|element| *element = !*element);
-        Sign::Minus
-    } else {
-        Sign::Plus
-    };
-
-    let mut num =  BigInt::new(sign, buffer);
-
-    if num.sign() == Sign::Minus {
-        num -= 1;
-    }
-
-    Ok(num)
+    Ok(
+        if buffer[digitcount-1] >> 31 != 0 {
+            buffer.iter_mut().for_each(|element| *element = !*element);
+            BigInt::new(Sign::Minus, buffer) - 1
+        } else {
+            BigInt::new(Sign::Plus, buffer)
+        }
+    )
 
 }
 
